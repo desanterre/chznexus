@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <title>Chz Nexus</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&family=Playfair+Display:wght@500;700&display=swap" rel="stylesheet" />
+  <style>
+
+    .console-box {
+      position: fixed; /* fixed for free movement */
+      /* top and left will be set by JS for perfect centering */
+      resize: none; /* disable native resize, use custom */
+      overflow: auto;
+      max-width: 95vw;
+      max-height: 80vh;
+      cursor: grab;
+      user-select: none;
+      z-index: 9999;
+      background: rgba(0,0,0,0.65);
+      backdrop-filter: blur(12px);
+      border-radius: 10px;
+      padding: 2rem;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+      color: #0f0;
+      max-width: 900px;
+      /* margin removed because position fixed and manual centering */
+    }
+
+    .console-box.resizing, .console-box.dragging {
+      cursor: grabbing;
+      user-select: none;
+    }
+
+    .resize-handle {
+      width: 15px;
+      height: 15px;
+      background: #ff7f00;
+      position: absolute;
+      right: 5px;
+      bottom: 5px;
+      cursor: se-resize;
+      border-radius: 3px;
+    }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: url('https://64.media.tumblr.com/63e1cc6b01473569225516f6d0819c86/f97d3c60ef5a1d28-43/s1280x1920/cb18505f1cff092155000aca8059673f38cbdd22.gifv') no-repeat center center fixed;
+      background-size: cover;
+      color: white;
+      min-height: 100vh;
+      margin: 0;
+      padding-top: 5rem;
+    }
+
+    header {
+      font-family: 'Playfair Display', serif;
+      text-align: center;
+      font-size: 3rem;
+      color: #fff;
+      text-shadow: 0 3px 7px rgba(0,0,0,0.7);
+      margin-bottom: 1.5rem;
+    }
+
+    .navbar-custom {
+      background-color: rgba(0, 0, 0, 0.5);
+      backdrop-filter: blur(12px);
+    }
+
+    #log {
+      height: 300px;
+      overflow-y: auto;
+      background-color: #111;
+      padding: 1rem;
+      border-radius: 6px;
+      font-family: monospace;
+      font-size: 0.9rem;
+      margin-bottom: 1rem;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .btn-orange {
+      background-color: #ff7f00;
+      border: none;
+      color: white;
+    }
+
+    .btn-orange:hover {
+      background-color: #e56700;
+    }
+
+    form input {
+      background-color: rgba(255,255,255,0.8) !important;
+    }
+  </style>
+</head>
+<body>
+
+  <nav class="navbar navbar-expand-lg navbar-dark fixed-top navbar-custom px-3">
+    <div class="container-fluid">
+      <span class="navbar-brand mb-0 h1">Chz Nexus</span>
+      <div class="ms-auto">
+        {% if user %}
+          <span class="me-3">Connecté en tant que <strong>{{ user }}</strong></span>
+          <a href="/logout" class="btn btn-outline-light btn-sm">Logout</a>
+        {% else %}
+          <form class="d-flex" method="post" action="/">
+            <input class="form-control me-2 form-control-sm" type="email" name="email" placeholder="Email" required>
+            <input class="form-control me-2 form-control-sm" type="password" name="password" placeholder="Mot de passe" required>
+            <button class="btn btn-orange btn-sm" type="submit">Login</button>
+          </form>
+        {% endif %}
+      </div>
+    </div>
+  </nav>
+
+  <header>Terminal Bot</header>
+
+  <div class="console-box">
+    <pre id="log">--- CHZ BOT TERMINAL ---</pre>
+    <div class="text-center">
+      <button id="toggleBtn" class="btn btn-orange" onclick="toggleBot()">
+        {{ "Disconnect" if bot_running else "Connect" }}
+      </button>
+    </div>
+    <div class="resize-handle"></div>
+  </div>
+
+  <script>
+    let ws;
+
+    function connectWS() {
+      ws = new WebSocket(`ws://${location.host}/ws`);
+      const log = document.getElementById('log');
+      ws.onmessage = event => {
+        log.textContent += '\n' + event.data;
+        log.scrollTop = log.scrollHeight;
+      };
+      ws.onclose = () => {
+        log.textContent += "\n[Connection closed]";
+      };
+    }
+
+    // DRAGGABLE & RESIZABLE CONSOLE BOX
+    const box = document.querySelector('.console-box');
+    const resizeHandle = box.querySelector('.resize-handle');
+
+    let isDragging = false;
+    let dragStartX, dragStartY;
+    let boxStartLeft, boxStartTop;
+
+    let isResizing = false;
+    let resizeStartX, resizeStartY;
+    let boxStartWidth, boxStartHeight;
+
+    // DRAGGING
+    box.addEventListener('mousedown', (e) => {
+      if (e.target === resizeHandle) return; // ignore drag if resizing
+      isDragging = true;
+      dragStartX = e.clientX;
+      dragStartY = e.clientY;
+      const rect = box.getBoundingClientRect();
+      boxStartLeft = rect.left;
+      boxStartTop = rect.top;
+      box.classList.add('dragging');
+      e.preventDefault();
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      if (isDragging) {
+        const dx = e.clientX - dragStartX;
+        const dy = e.clientY - dragStartY;
+        box.style.left = `${boxStartLeft + dx}px`;
+        box.style.top = `${boxStartTop + dy}px`;
+      } else if (isResizing) {
+        const dx = e.clientX - resizeStartX;
+        const dy = e.clientY - resizeStartY;
+        box.style.width = `${Math.max(300, boxStartWidth + dx)}px`;
+        box.style.height = `${Math.max(150, boxStartHeight + dy)}px`;
+      }
+    });
+
+    window.addEventListener('mouseup', () => {
+      if (isDragging) {
+        isDragging = false;
+        box.classList.remove('dragging');
+      }
+      if (isResizing) {
+        isResizing = false;
+        box.classList.remove('resizing');
+      }
+    });
+
+    // RESIZING
+    resizeHandle.addEventListener('mousedown', (e) => {
+      isResizing = true;
+      resizeStartX = e.clientX;
+      resizeStartY = e.clientY;
+      const rect = box.getBoundingClientRect();
+      boxStartWidth = rect.width;
+      boxStartHeight = rect.height;
+      box.classList.add('resizing');
+      e.preventDefault();
+      e.stopPropagation();
+    });
+
+    window.onload = async () => {
+      // Center the box horizontally and vertically (with some cropping top)
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const rect = box.getBoundingClientRect();
+
+      const left = (vw - rect.width) / 2;
+      const top = Math.min(150, (vh - rect.height) / 2);
+
+      box.style.left = `${left}px`;
+      box.style.top = `${top}px`;
+
+      // Load bot status & connect WS if running
+      const resp = await fetch('/bot-status');
+      const data = await resp.json();
+      if (data.running) {
+        document.getElementById('toggleBtn').textContent = 'Disconnect';
+        connectWS();
+      }
+    };
+
+    async function toggleBot() {
+      const resp = await fetch('/toggle-bot', { method: 'POST' });
+      const data = await resp.json();
+      const btn = document.getElementById('toggleBtn');
+      btn.textContent = data.status === 'started' ? 'Disconnect' : 'Connect';
+      if (data.status === 'started') connectWS();
+      else if (ws) ws.close();
+    }
+  </script>
+
+</body>
+</html>

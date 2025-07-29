@@ -1,116 +1,109 @@
 import asyncio
-from typing import Set
+from typing import Set, Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Form, Request, Depends, Cookie
+from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.templating import Jinja2Templates
+
+from chznexus.bot.auth import ChapatizClient
+from chznexus.bot.bot import connect
 
 app = FastAPI()
+templates = Jinja2Templates(directory="chznexus/templates")
 
-bot_task = None
-websockets: Set[WebSocket] = set()
-bot_running = False  # track bot state
+class BotState:
+    def __init__(self):
+        self.task: Optional[asyncio.Task] = None
+        self.websockets: Set[WebSocket] = set()
+        self.running: bool = False
 
+bot_state = BotState()
+
+def get_bot_state():
+    return bot_state
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_form(request: Request):
+    return templates.TemplateResponse("login.html", {"request": request, "error": None})
+
+@app.post("/", response_class=HTMLResponse)
+async def login_post(
+    request: Request,
+    email: str = Form(...),
+    password: str = Form(...),
+):
+    client = ChapatizClient()
+    try:
+        client.fetch_login_token()
+        client.login(email, password)
+    except Exception as e:
+        return templates.TemplateResponse(
+            "login.html",
+            {"request": request, "error": f"Login failed: {str(e)}"}
+        )
+    response = RedirectResponse(url="/", status_code=303)
+    response.set_cookie("user", email)
+    return response
 
 @app.get("/", response_class=HTMLResponse)
-async def get():
-    # Button label depends on bot_running
-    button_label = "Disconnect" if bot_running else "Connect"
-
-    return f"""
-    <html>
-        <head><title>ChzNexus Bot Console</title></head>
-        <body>
-            <h1>CHZ Nexus Bot</h1>
-            <button id="toggleBtn" onclick="toggleBot()">{button_label}</button>
-            <pre id="log" style="background:#111;color:#0f0;padding:1em;height:300px;overflow:auto;"></pre>
-            <script>
-                let ws;
-                function connectWS() {{
-                    ws = new WebSocket(`ws://${{location.host}}/ws`);
-                    const log = document.getElementById('log');
-                    ws.onmessage = event => {{
-                        log.textContent += event.data + '\\n';
-                        log.scrollTop = log.scrollHeight;
-                    }};
-                    ws.onclose = () => log.textContent += "\\n[Connection closed]";
-                }}
-
-                async function toggleBot() {{
-                    const resp = await fetch('/toggle-bot', {{ method: 'POST' }});
-                    const data = await resp.json();
-
-                    document.getElementById('toggleBtn').textContent = data.status === 'started' ? 'Disconnect' : 'Connect';
-
-                    if(data.status === 'started') {{
-                        connectWS();
-                    }} else {{
-                        if(ws) ws.close();
-                    }}
-                }}
-
-                // Connect WebSocket if bot already running on page load
-                window.onload = async () => {{
-                    const resp = await fetch('/bot-status');
-                    const data = await resp.json();
-                    if(data.running) {{
-                        document.getElementById('toggleBtn').textContent = 'Disconnect';
-                        connectWS();
-                    }}
-                }};
-            </script>
-        </body>
-    </html>
-    """
-
+async def index(
+    request: Request,
+    bot: BotState = Depends(get_bot_state),
+    user: Optional[str] = Cookie(default=None)
+):
+    return templates.TemplateResponse(
+        "index.html",
+        {
+            "request": request,
+            "bot_running": bot.running,
+            "user": user,
+            "error": None
+        }
+    )
 
 @app.get("/bot-status")
-async def bot_status():
-    global bot_running
-    return {"running": bot_running}
-
+async def bot_status(bot: BotState = Depends(get_bot_state)):
+    return {"running": bot.running}
 
 @app.post("/toggle-bot")
-async def toggle_bot():
-    global bot_task, bot_running
-
-    if not bot_running:
-        if not bot_task or bot_task.done():
-            bot_task = asyncio.create_task(run_bot())
-        bot_running = True
+async def toggle_bot(bot: BotState = Depends(get_bot_state)):
+    if not bot.running:
+        if not bot.task or bot.task.done():
+            bot.task = asyncio.create_task(run_bot(bot))
+        bot.running = True
         status = "started"
     else:
-        # cancel the bot task
-        if bot_task:
-            bot_task.cancel()
+        if bot.task:
+            bot.task.cancel()
             try:
-                await bot_task
+                await bot.task
             except asyncio.CancelledError:
                 pass
-        bot_running = False
+        bot.running = False
         status = "stopped"
-
     return {"status": status}
 
+@app.get("/logout")
+async def logout():
+    response = RedirectResponse(url="/", status_code=303)
+    response.delete_cookie("user")
+    return response
 
-async def run_bot():
-    async def mock_print(msg):
-        for ws in websockets.copy():
+async def run_bot(bot: BotState):
+    async def log_fn(msg: str):
+        for ws in bot.websockets.copy():
             try:
                 await ws.send_text(msg)
             except Exception:
-                websockets.discard(ws)
-
-    from chznexus.bot.bot import connect
-
-    await connect(log_fn=mock_print)
-
+                bot.websockets.discard(ws)
+    await connect(log_fn=log_fn)
 
 @app.websocket("/ws")
-async def websocket_endpoint(ws: WebSocket):
+async def websocket_endpoint(ws: WebSocket, bot: BotState = Depends(get_bot_state)):
     await ws.accept()
-    websockets.add(ws)
+    bot.websockets.add(ws)
     try:
         while True:
             await ws.receive_text()
     except WebSocketDisconnect:
-        websockets.remove(ws)
+        bot.websockets.discard(ws)
