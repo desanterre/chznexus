@@ -1,0 +1,37 @@
+# Python cache and bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Poetry virtual environment (if created inside project)
+.env/
+.venv/
+venv/
+ENV/
+env/
+
+# macOS system files
+.DS_Store
+
+# Logs and output files
+*.log
+*.xlsx
+*.txt
+
+# pytest cache
+.pytest_cache/
+
+# VSCode settings (optional)
+.vscode/
+
+# pipenv files (if ever used)
+Pipfile.lock
+
+# mypy cache
+.mypy_cache/
+.dmypy.json
+
+# coverage reports
+htmlcov/
+.coverage
+
