@@ -1,75 +1,67 @@
+# chznexus/bot/websocket_handler.py
 import asyncio
-import re
+from threading import Thread
 
-import websockets
+from fastapi import FastAPI, Form, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
 
-from chznexus.bin.config import HEADERS, WS_URI
+from chznexus.bot.bot import connect  # Import connect here
 
-from .chat import handle_user_talk, send_chat_message, terminal_input_loop
-from .user import append_to_excel, update_user_map, user_map
-from .utils import parse_login_ok, spoof_login_ok_response
+app = FastAPI()
 
-
-async def send_ping(websocket):
-    while True:
-        await asyncio.sleep(5)
-        await websocket.send("wy13:ClientMessagey4:PING:0")
+bot_task = None
+bot_running = False
+log_buffer = []
+stop_event = asyncio.Event()
 
 
-async def connect():
-    async with websockets.connect(WS_URI, additional_headers=HEADERS) as websocket:
-        print("✅ Connected to WebSocket.")
+def run_bot():
+    async def logger(msg):
+        log_buffer.append(msg)
+        if len(log_buffer) > 100:
+            log_buffer.pop(0)
 
-        # LOGIN
-        await websocket.send("wy13:ClientMessagey5:LOGIN:3y8:visiteury1:0f")
-        print("📨 Sent LOGIN")
+    async def main():
+        stop_event.clear()
+        bot = asyncio.create_task(connect(log_fn=logger))
+        await stop_event.wait()
+        bot.cancel()
+        try:
+            await bot
+        except asyncio.CancelledError:
+            log_buffer.append("🛑 Bot disconnected")
 
-        while True:
-            message = await websocket.recv()
+    asyncio.run(main())
 
-            if "LOGIN_OK" in message:
-                message = spoof_login_ok_response(message)
-                print("✅ LOGIN_OK received.")
 
-                username = parse_login_ok(message)
-                user_id = message.split(":")[2]
-                if username:
-                    update_user_map(user_id, username)
-                    append_to_excel(user_id, username)
-                break
+@app.get("/", response_class=HTMLResponse)
+async def index():
+    logs = "<br>".join(log_buffer)
+    button_label = "Disconnect" if bot_running else "Connect"
+    return f"""
+        <html>
+            <head><title>CHZ Nexus Bot</title></head>
+            <body>
+                <h1>CHZ Nexus Control Panel</h1>
+                <form action="/toggle" method="post">
+                    <button type="submit">{button_label}</button>
+                </form>
+                <h2>Logs:</h2>
+                <div style="font-family: monospace; white-space: pre-wrap; border: 1px solid #ccc; padding: 1em;">{logs}</div>
+            </body>
+        </html>
+    """
 
-        await websocket.send("wy13:ClientMessagey11:SET_NOQUERY:1f")
-        await websocket.send("wy13:ClientMessagey11:CHANGE_ROOM:2y13:central.placen")
-        await asyncio.sleep(1)
-        await websocket.send("wy13:ClientMessagey5:READY:0")
-        await asyncio.sleep(2)
-        await send_chat_message(websocket, "Hello from spoofed visitor!")
 
-        asyncio.create_task(send_ping(websocket))
-        asyncio.create_task(terminal_input_loop(websocket))
-
-        while True:
-            try:
-                message = await websocket.recv()
-
-                if "USER_JOINED" in message:
-                    match = re.search(r"midi(\d+)y4:nicky\d+:(\w+)", message)
-                    if match:
-                        user_id, username = match.group(1), match.group(2)
-                        update_user_map(user_id, username)
-                        append_to_excel(user_id, username)
-
-                elif "USER_TALK" in message:
-                    handle_user_talk(message, user_map)
-
-                elif "USER_LEFT" in message:
-                    match = re.search(r"midi(\d+)", message)
-                    if match:
-                        user_id = match.group(1)
-                        username = user_map.get(user_id, "Unknown")
-                        print(f"📤 User {username} ({user_id}) logged out.")
-                        user_map.pop(user_id, None)
-
-            except websockets.exceptions.ConnectionClosed as e:
-                print("🔌 Connection closed:", e)
-                break
+@app.post("/toggle")
+async def toggle():
+    global bot_task, bot_running
+    if not bot_running:
+        if bot_task is None or not bot_task.is_alive():
+            bot_task = Thread(target=run_bot)
+            bot_task.start()
+        bot_running = True
+    else:
+        stop_event.set()
+        bot_running = False
+    return RedirectResponse(url="/", status_code=303)

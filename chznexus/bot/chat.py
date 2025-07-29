@@ -29,6 +29,8 @@ async def terminal_input_loop(websocket):
 
 def handle_user_talk(message, user_map):
     import re
+    import urllib.parse
+    from datetime import datetime
 
     match = re.search(r"5i(\d+)y(\d+):", message)
     if match:
@@ -42,3 +44,5 @@ def handle_user_talk(message, user_map):
         print("💬", log_line)
         with open(CHAT_LOG_FILE, "a", encoding="utf-8") as f:
             f.write(log_line + "\n")
+        return log_line
+    return None

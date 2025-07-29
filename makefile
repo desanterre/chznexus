@@ -7,7 +7,7 @@ shell:
 	poetry shell
 
 run:
-	poetry run python main.py
+	poetry run uvicorn chznexus.app:app --reload
 
 black:
 	poetry run black .

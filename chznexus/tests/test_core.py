@@ -5,9 +5,10 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from chznexus.bot.bot import user_map
 from chznexus.bot.user import append_to_excel  # Adjust import if needed
 from chznexus.bot.utils import parse_login_ok
-from chznexus.bot.websocket_handler import connect, user_map
+from chznexus.bot.websocket_handler import connect
 
 
 def test_parse_login_ok():
@@ -23,21 +24,23 @@ async def test_connect_mock(mock_connect):
 
     mock_websocket.recv = AsyncMock(
         side_effect=[
-            "LOGIN_OK:123:user123",  # Login OK response (does not add user_map)
-            "USER_JOINED midi456y4:nicky456:someone",  # User joined message adds user 456
-            "USER_TALK mid123y4:nicky123:Hello world",  # User talk message (example)
-            "USER_LEFT midi456",  # User left message removes user 456
-            asyncio.CancelledError(),  # Exit loop
+            "LOGIN_OK:123:user123",  # Login OK response
+            "USER_JOINED midi456y4:nicky456:someone",  # User joined
+            "USER_TALK mid123y4:nicky123:Hello world",  # User talk
+            "USER_LEFT midi456",  # User left
+            asyncio.CancelledError(),  # Stop the loop
         ]
     )
 
     mock_connect.return_value.__aenter__.return_value = mock_websocket
 
     user_map.clear()
+    mock_log_fn = AsyncMock()  # <-- Async mock logger to pass in
 
     with pytest.raises(asyncio.CancelledError):
-        await connect()
+        await connect(log_fn=mock_log_fn)  # <-- Pass async log_fn here
 
+    # Check users were added and removed correctly
     assert "123" not in user_map
     assert "456" not in user_map
 
